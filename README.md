@@ -41,8 +41,3 @@ Dump address from a private key:
 $ cosmosutil dump-address 0x96adc457e360fb138fab007df9153f9145df8fc1ea05bc417fd2693703c7ecb7
 addr cosmos1krxe7dqswsqv078wmrx6d80xx9l64lft7qtz83
 ```
-
-# Install
-```
-GO111MODULE=on go install github.com/10gic/cosmosutil@latest
-```
