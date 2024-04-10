@@ -57,7 +57,7 @@ func AddTransferFlagsToCmd(cmd *cobra.Command) {
 	// cmd.Flags().Uint64P(FlagSequence, "s", 0, "The sequence number of the signing account (offline mode only)")
 	cmd.Flags().String(FlagFees, "1200uatom", "Fees to pay along with transaction; eg: 10uatom")
 	// cmd.Flags().String(FlagGasPrices, "", "Gas prices in decimal format to determine the transaction fee (e.g. 0.1uatom)")
-	cmd.Flags().String(FlagRestApi, "https://api.cosmos.network", "REST api for this chain, cosmos based chain api can found in https://github.com/cosmos/chain-registry")
+	cmd.Flags().String(FlagRestApi, "https://cosmos-rest.publicnode.com", "REST api for this chain, cosmos based chain api can found in https://github.com/cosmos/chain-registry")
 	// cmd.Flags().Float64(FlagGasAdjustment, DefaultGasAdjustment, "adjustment factor to be multiplied against the estimate returned by the tx simulation; if the gas limit is set manually this flag is ignored ")
 	// cmd.Flags().StringP(FlagBroadcastMode, "b", BroadcastSync, "Transaction broadcasting mode (sync|async|block)")
 	// cmd.Flags().Bool(FlagDryRun, false, "ignore the --gas flag and perform a simulation of a transaction, but don't broadcast it")
@@ -78,7 +78,7 @@ func AddDumpAddressFlagsToCmd(cmd *cobra.Command) {
 }
 
 func AddBalanceFlagsToCmd(cmd *cobra.Command) {
-	cmd.Flags().String(FlagRestApi, "https://api.cosmos.network", "REST api for this chain, cosmos based chain api can found in https://github.com/cosmos/chain-registry")
+	cmd.Flags().String(FlagRestApi, "https://cosmos-rest.publicnode.com", "REST api for this chain, cosmos based chain api can found in https://github.com/cosmos/chain-registry")
 }
 
 // GasSetting encapsulates the possible values passed through the --gas flag.

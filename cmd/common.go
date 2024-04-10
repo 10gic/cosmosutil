@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/cosmos/btcutil/bech32"
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
@@ -15,8 +16,12 @@ import (
 	txtypes "github.com/cosmos/cosmos-sdk/types/tx"
 	signingtypes "github.com/cosmos/cosmos-sdk/types/tx/signing"
 	authtx "github.com/cosmos/cosmos-sdk/x/auth/tx"
+	"github.com/tyler-smith/go-bip32"
+	"github.com/tyler-smith/go-bip39"
 	"golang.org/x/crypto/ripemd160"
 	"io/ioutil"
+	"math"
+	"math/big"
 	"net/http"
 	"strconv"
 	"strings"
@@ -235,7 +240,7 @@ func buildPrivateKey(privateKeyHex string) (*secp256k1.PrivKey, error) {
 }
 
 /// buildAddressFromPrivateKey builds address from private key hex string
-/// https://docs.cosmos.network/master/architecture/adr-028-public-key-addresses.html#legacy-public-key-addresses-don-t-change
+/// https://github.com/cosmos/cosmos-sdk/blob/main/docs/architecture/adr-028-public-key-addresses.md#legacy-public-key-addresses-dont-change
 func buildAddressFromPrivateKey(hrp, privateKeyHex string) (string, error) {
 	if strings.HasPrefix(privateKeyHex, "0x") {
 		privateKeyHex = privateKeyHex[2:] // remove leading 0x
@@ -366,4 +371,81 @@ func postSimulateTx(restApi string, tx []byte) (string, error) {
 	}
 
 	return string(prettyJSON.Bytes()), nil
+}
+
+func parseDerivationPath(derivationPath string) ([]uint32, error) {
+	components := strings.Split(derivationPath, "/")
+	if len(components) == 0 {
+		return nil, errors.New("empty derivation path")
+	}
+
+	if strings.TrimSpace(components[0]) != "m" {
+		return nil, errors.New("use 'm/' prefix for path")
+	}
+
+	components = components[1:]
+
+	// All remaining components are relative, append one by one
+	if len(components) == 0 {
+		return nil, errors.New("empty derivation path") // Empty relative paths
+	}
+
+	var result []uint32
+	for _, component := range components {
+		// Ignore any user added whitespace
+		component = strings.TrimSpace(component)
+		var value uint32
+
+		// Handle hardened paths
+		if strings.HasSuffix(component, "'") {
+			value = bip32.FirstHardenedChild
+			component = strings.TrimSpace(strings.TrimSuffix(component, "'"))
+		}
+		// Handle the non hardened component
+		bigval, ok := new(big.Int).SetString(component, 0)
+		if !ok {
+			return nil, fmt.Errorf("invalid component: %s", component)
+		}
+		max := math.MaxUint32 - value
+		if bigval.Sign() < 0 || bigval.Cmp(big.NewInt(int64(max))) > 0 {
+			if value == 0 {
+				return nil, fmt.Errorf("component %v out of allowed range [0, %d]", bigval, max)
+			}
+			return nil, fmt.Errorf("component %v out of allowed hardened range [0, %d]", bigval, max)
+		}
+		value += uint32(bigval.Uint64())
+
+		// Append and repeat
+		result = append(result, value)
+	}
+
+	return result, nil
+}
+
+// MnemonicToPrivateKey generate private key from mnemonic words
+func MnemonicToPrivateKey(mnemonic string, derivationPath string) (string, error) {
+	// Generate a Bip32 HD wallet for the mnemonic and a user supplied password
+	seed := bip39.NewSeed(mnemonic, "")
+	// Generate a new master node using the seed.
+	masterKey, err := bip32.NewMasterKey(seed)
+	if err != nil {
+		return "", err
+	}
+
+	childIdxs, err := parseDerivationPath(derivationPath)
+	if err != nil {
+		return "", err
+	}
+
+	currentKey := masterKey
+	for _, childIdx := range childIdxs {
+		currentKey, err = currentKey.NewChildKey(childIdx)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	privateKeyBytes := currentKey.Key // 32 bytes private key
+
+	return "0x" + hex.EncodeToString(privateKeyBytes), nil
 }
