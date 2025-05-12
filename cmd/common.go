@@ -9,13 +9,15 @@ import (
 	"errors"
 	"fmt"
 	"github.com/cosmos/btcutil/bech32"
+	"github.com/cosmos/cosmos-sdk/codec"
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
 	"github.com/cosmos/cosmos-sdk/crypto/keys/secp256k1"
-	"github.com/cosmos/cosmos-sdk/server/rosetta"
-	sdk "github.com/cosmos/cosmos-sdk/types"
+	cryptotypes "github.com/cosmos/cosmos-sdk/crypto/types"
+	"github.com/cosmos/cosmos-sdk/types"
 	txtypes "github.com/cosmos/cosmos-sdk/types/tx"
-	signingtypes "github.com/cosmos/cosmos-sdk/types/tx/signing"
+	txsigning "github.com/cosmos/cosmos-sdk/types/tx/signing"
 	authtx "github.com/cosmos/cosmos-sdk/x/auth/tx"
+	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
 	"github.com/tyler-smith/go-bip32"
 	"github.com/tyler-smith/go-bip39"
 	"golang.org/x/crypto/ripemd160"
@@ -27,14 +29,14 @@ import (
 	"strings"
 )
 
-/// estimateGasLimit estimates gas limit
+// estimateGasLimit estimates gas limit
 func estimateGasLimit(
 	restApi string,
 	sequence uint64,
 	memo string,
 	feeCoinDenom string,
 	feeCoinAmount int64,
-	msgs ...sdk.Msg,
+	msgs ...types.Msg,
 ) (uint64, error) {
 
 	_, tx, err := buildSimTx(sequence, memo, feeCoinDenom, feeCoinAmount, msgs...)
@@ -70,16 +72,18 @@ func buildSimTx(
 	memo string,
 	feeCoinDenom string,
 	feeCoinAmount int64,
-	msgs ...sdk.Msg,
+	msgs ...types.Msg,
 ) (string, []byte, error) {
-
-	protoCodec, _ := rosetta.MakeCodec()
+	interfaceRegistry := codectypes.NewInterfaceRegistry()
+	interfaceRegistry.RegisterImplementations((*types.Msg)(nil), &banktypes.MsgSend{}, &banktypes.MsgMultiSend{})
+	interfaceRegistry.RegisterImplementations((*cryptotypes.PubKey)(nil), &secp256k1.PubKey{})
+	protoCodec := codec.NewProtoCodec(interfaceRegistry)
 
 	// Create an empty signature
-	sig := signingtypes.SignatureV2{
+	sig := txsigning.SignatureV2{
 		PubKey: &secp256k1.PubKey{},
-		Data: &signingtypes.SingleSignatureData{
-			SignMode: signingtypes.SignMode_SIGN_MODE_DIRECT,
+		Data: &txsigning.SingleSignatureData{
+			SignMode: txsigning.SignMode_SIGN_MODE_DIRECT,
 		},
 		Sequence: sequence,
 	}
@@ -95,7 +99,7 @@ func buildSimTx(
 		return "", nil, err
 	}
 
-	feeAmount := sdk.NewCoins(sdk.NewInt64Coin(feeCoinDenom, feeCoinAmount))
+	feeAmount := types.NewCoins(types.NewInt64Coin(feeCoinDenom, feeCoinAmount))
 	txBuilder.SetFeeAmount(feeAmount)
 	txBuilder.SetMemo(memo)
 
@@ -112,23 +116,32 @@ func buildSimTx(
 	return string(encodedJsonTx), encodedTx, nil
 }
 
-/// buildTx creates a signed tx
+// buildTx creates a signed tx
 func buildTx(
 	senderPrivateKey string,
 	chainId string,
 	accountNumber uint64,
-	sequence uint64,
+	accountSequence uint64,
 	memo string,
 	feeCoinDenom string,
 	feeCoinAmount int64,
 	gasLimit uint64,
-	msgs ...sdk.Msg,
+	msgs ...types.Msg,
 ) (string, []byte, error) {
-	protoCodec, _ := rosetta.MakeCodec()
+	interfaceRegistry := codectypes.NewInterfaceRegistry()
+	interfaceRegistry.RegisterImplementations((*types.Msg)(nil), &banktypes.MsgSend{}, &banktypes.MsgMultiSend{})
+	interfaceRegistry.RegisterImplementations((*cryptotypes.PubKey)(nil), &secp256k1.PubKey{})
+	protoCodec := codec.NewProtoCodec(interfaceRegistry)
 
-	privateKey, err := buildPrivateKey(senderPrivateKey)
+	if strings.HasPrefix(senderPrivateKey, "0x") {
+		senderPrivateKey = senderPrivateKey[2:] // remove leading 0x
+	}
+	privateKeyByte, err := hex.DecodeString(senderPrivateKey)
 	if err != nil {
-		return "", nil, fmt.Errorf("convert public key to type any fail: %w", err)
+		return "", nil, err
+	}
+	privateKey := &secp256k1.PrivKey{
+		Key: privateKeyByte,
 	}
 
 	publicKeyTypeAny, err := codectypes.NewAnyWithValue(privateKey.PubKey())
@@ -142,14 +155,14 @@ func buildTx(
 		ModeInfo: &txtypes.ModeInfo{
 			Sum: &txtypes.ModeInfo_Single_{
 				Single: &txtypes.ModeInfo_Single{
-					Mode: signingtypes.SignMode_SIGN_MODE_DIRECT,
+					Mode: txsigning.SignMode_SIGN_MODE_DIRECT,
 				},
 			},
 		},
-		Sequence: sequence,
+		Sequence: accountSequence,
 	})
 
-	feeAmount := sdk.NewCoins(sdk.NewInt64Coin(feeCoinDenom, feeCoinAmount))
+	feeAmount := types.NewCoins(types.NewInt64Coin(feeCoinDenom, feeCoinAmount))
 	fee := txtypes.Fee{Amount: feeAmount, GasLimit: gasLimit}
 	authInfo := &txtypes.AuthInfo{
 		Fee:         &fee,
@@ -186,12 +199,12 @@ func buildTx(
 	if err != nil {
 		return "", nil, fmt.Errorf("sign fail: %w", err)
 	}
-	sigData := &signingtypes.SingleSignatureData{
-		SignMode:  signingtypes.SignMode_SIGN_MODE_DIRECT,
+	sigData := &txsigning.SingleSignatureData{
+		SignMode:  txsigning.SignMode_SIGN_MODE_DIRECT,
 		Signature: signature,
 	}
 
-	sig := signingtypes.SignatureV2{
+	sig := txsigning.SignatureV2{
 		PubKey:   privateKey.PubKey(),
 		Data:     sigData,
 		Sequence: signerInfo[0].Sequence,
@@ -201,11 +214,11 @@ func buildTx(
 	txBuilder := txConfig.NewTxBuilder()
 	err = txBuilder.SetMsgs(msgs...)
 	if err != nil {
-		return "", nil, err
+		return "", nil, fmt.Errorf("set msgs fail: %w", err)
 	}
 	err = txBuilder.SetSignatures(sig)
 	if err != nil {
-		return "", nil, err
+		return "", nil, fmt.Errorf("set signatures fail: %w", err)
 	}
 	txBuilder.SetFeeAmount(feeAmount)
 	txBuilder.SetGasLimit(gasLimit)
@@ -213,18 +226,18 @@ func buildTx(
 
 	encodedJsonTx, err := txConfig.TxJSONEncoder()(txBuilder.GetTx())
 	if err != nil {
-		return "", nil, err
+		return "", nil, fmt.Errorf("TxJSONEncoder fail: %w", err)
 	}
 
 	encodedTx, err := txConfig.TxEncoder()(txBuilder.GetTx())
 	if err != nil {
-		return "", nil, err
+		return "", nil, fmt.Errorf("TxEncoder fail: %w", err)
 	}
 
 	return string(encodedJsonTx), encodedTx, nil
 }
 
-/// buildPrivateKey builds secp256k1.PrivKey from private key hex string
+// buildPrivateKey builds secp256k1.PrivKey from private key hex string
 func buildPrivateKey(privateKeyHex string) (*secp256k1.PrivKey, error) {
 	if strings.HasPrefix(privateKeyHex, "0x") {
 		privateKeyHex = privateKeyHex[2:] // remove leading 0x
@@ -239,8 +252,8 @@ func buildPrivateKey(privateKeyHex string) (*secp256k1.PrivKey, error) {
 	return privateKey, nil
 }
 
-/// buildAddressFromPrivateKey builds address from private key hex string
-/// https://github.com/cosmos/cosmos-sdk/blob/main/docs/architecture/adr-028-public-key-addresses.md#legacy-public-key-addresses-dont-change
+// buildAddressFromPrivateKey builds address from private key hex string
+// https://github.com/cosmos/cosmos-sdk/blob/main/docs/architecture/adr-028-public-key-addresses.md#legacy-public-key-addresses-dont-change
 func buildAddressFromPrivateKey(hrp, privateKeyHex string) (string, error) {
 	if strings.HasPrefix(privateKeyHex, "0x") {
 		privateKeyHex = privateKeyHex[2:] // remove leading 0x
